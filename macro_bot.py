@@ -5,16 +5,13 @@
 
 import logging
 import asyncio
-import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
-import yfinance as yf
 from telegram import Bot
 from telegram.constants import ParseMode
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 
 logging.basicConfig(
@@ -23,44 +20,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# GitHub Secrets에서 자동으로 읽어옴
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
 KST = pytz.timezone("Asia/Seoul")
 
-TICKERS = {
-    "US2Y":   "^IRX",
-    "US10Y":  "^TNX",
-    "US30Y":  "^TYX",
-    "NASDAQ": "^IXIC",
-    "SP500":  "^GSPC",
-    "KOSPI":  "^KS11",
-    "KOSDAQ": "^KQ11",
-    "DXY":    "DX-Y.NYB",
-    "USDKRW": "KRW=X",
-    "GOLD":   "GC=F",
-    "WTI":    "CL=F",
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
 }
 
 
-def fetch_yf_price(ticker: str) -> float | None:
+def fetch_yahoo(symbol: str) -> float | None:
+    """야후 파이낸스 v8 API로 직접 호출"""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    params = {"interval": "1d", "range": "5d"}
     try:
-        data = yf.download(ticker, period="5d", interval="1d",
-                           progress=False, auto_adjust=True)
-        if data.empty:
-            return None
-        return float(data["Close"].dropna().iloc[-1])
+        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+        return round(closes[-1], 3) if closes else None
     except Exception as e:
-        logger.warning(f"yfinance 실패 ({ticker}): {e}")
+        logger.error(f"야후 API 실패 ({symbol}): {e}")
         return None
 
 
 def fetch_macro_data() -> dict:
+    symbols = {
+        "US2Y":   "^IRX",
+        "US10Y":  "^TNX",
+        "US30Y":  "^TYX",
+        "NASDAQ": "^IXIC",
+        "SP500":  "^GSPC",
+        "KOSPI":  "^KS11",
+        "KOSDAQ": "^KQ11",
+        "DXY":    "DX-Y.NYB",
+        "USDKRW": "KRW=X",
+        "GOLD":   "GC=F",
+        "WTI":    "CL=F",
+    }
     data = {}
-    for key, ticker in TICKERS.items():
-        logger.info(f"  수집 중: {key} ({ticker})")
-        data[key] = fetch_yf_price(ticker)
+    for key, symbol in symbols.items():
+        logger.info(f"  수집 중: {key} ({symbol})")
+        data[key] = fetch_yahoo(symbol)
     return data
 
 
@@ -159,7 +165,7 @@ def build_message(data: dict, news: list[dict]) -> str:
     lines += [
         "",
         "━━━━━━━━━━━━━━━━━━━━━",
-        "_출처\\: yfinance \\| 네이버 금융_",
+        "_출처\\: Yahoo Finance \\| 네이버 금융_",
     ]
 
     return "\n".join(lines)
@@ -184,5 +190,4 @@ async def send_macro_report():
 
 
 if __name__ == "__main__":
-    # GitHub Actions에서는 스케줄러 없이 바로 1회 실행
     asyncio.run(send_macro_report())
